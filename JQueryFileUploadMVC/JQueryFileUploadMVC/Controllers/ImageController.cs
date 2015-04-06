@@ -101,6 +101,7 @@
 
         public void Upload(ImageViewModel model)
         {
+            // Disme thang amagri
         }
 
         #endregion Methods
