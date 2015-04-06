@@ -1,0 +1,29 @@
+﻿@model JQueryFileUploadMVC.Models.ImageViewModel
+
+@{
+    ViewBag.Title = "Create";
+}
+<div class="container">
+    @using (Html.BeginForm(new { ReturnUrl = ViewBag.ReturnUrl }))
+    {
+        @Html.AntiForgeryToken()
+        @Html.ValidationSummary(true)
+
+        <fieldset>
+            <h2 class="lead">Log in Form</h2>
+            <ol>
+                <li>
+                    @Html.LabelFor(m => m.Metadata)
+                    @Html.TextBoxFor(m => m.Metadata)
+                    @Html.ValidationMessageFor(m => m.Metadata)
+                </li>
+                <li>
+                    @Html.LabelFor(m => m.ImagePath)
+                    @Html.TextBoxFor(m => m.ImagePath)
+                </li>
+
+            </ol>
+            <input type="submit" value="Create" />
+        </fieldset>
+    }
+</div>
