@@ -1,10 +1,12 @@
-﻿using System.Web;
-using System.Web.Optimization;
-
-namespace JQueryFileUploadMVC
+﻿namespace JQueryFileUploadMVC
 {
+    using System.Web;
+    using System.Web.Optimization;
+
     public class BundleConfig
     {
+        #region Methods
+
         // For more information on Bundling, visit http://go.microsoft.com/fwlink/?LinkId=254725
         public static void RegisterBundles(BundleCollection bundles)
         {
@@ -39,5 +41,7 @@ namespace JQueryFileUploadMVC
                         "~/Content/themes/base/jquery.ui.progressbar.css",
                         "~/Content/themes/base/jquery.ui.theme.css"));
         }
+
+        #endregion Methods
     }
 }

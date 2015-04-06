@@ -1,101 +1,41 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Transactions;
-using System.Web;
-using System.Web.Mvc;
-using System.Web.Security;
-using DotNetOpenAuth.AspNet;
-using Microsoft.Web.WebPages.OAuth;
-using WebMatrix.WebData;
-using JQueryFileUploadMVC.Filters;
-using JQueryFileUploadMVC.Models;
-
-namespace JQueryFileUploadMVC.Controllers
+﻿namespace JQueryFileUploadMVC.Controllers
 {
+    using System;
+    using System.Collections.Generic;
+    using System.Linq;
+    using System.Transactions;
+    using System.Web;
+    using System.Web.Mvc;
+    using System.Web.Security;
+
+    using DotNetOpenAuth.AspNet;
+
+    using JQueryFileUploadMVC.Filters;
+    using JQueryFileUploadMVC.Models;
+
+    using Microsoft.Web.WebPages.OAuth;
+
+    using WebMatrix.WebData;
+
     [Authorize]
     [InitializeSimpleMembership]
     public class AccountController : Controller
     {
-        //
-        // GET: /Account/Login
+        #region Enumerations
 
-        [AllowAnonymous]
-        public ActionResult Login(string returnUrl)
+        public enum ManageMessageId
         {
-            ViewBag.ReturnUrl = returnUrl;
-            return View();
+            ChangePasswordSuccess,
+            SetPasswordSuccess,
+            RemoveLoginSuccess,
         }
 
-        //
-        // POST: /Account/Login
+        #endregion Enumerations
 
-        [HttpPost]
-        [AllowAnonymous]
-        [ValidateAntiForgeryToken]
-        public ActionResult Login(LoginModel model, string returnUrl)
-        {
-            if (ModelState.IsValid && WebSecurity.Login(model.UserName, model.Password, persistCookie: model.RememberMe))
-            {
-                return RedirectToLocal(returnUrl);
-            }
-
-            // If we got this far, something failed, redisplay form
-            ModelState.AddModelError("", "The user name or password provided is incorrect.");
-            return View(model);
-        }
-
-        //
-        // POST: /Account/LogOff
-
-        [HttpPost]
-        [ValidateAntiForgeryToken]
-        public ActionResult LogOff()
-        {
-            WebSecurity.Logout();
-
-            return RedirectToAction("Index", "Home");
-        }
-
-        //
-        // GET: /Account/Register
-
-        [AllowAnonymous]
-        public ActionResult Register()
-        {
-            return View();
-        }
-
-        //
-        // POST: /Account/Register
-
-        [HttpPost]
-        [AllowAnonymous]
-        [ValidateAntiForgeryToken]
-        public ActionResult Register(RegisterModel model)
-        {
-            if (ModelState.IsValid)
-            {
-                // Attempt to register the user
-                try
-                {
-                    WebSecurity.CreateUserAndAccount(model.UserName, model.Password);
-                    WebSecurity.Login(model.UserName, model.Password);
-                    return RedirectToAction("Index", "Home");
-                }
-                catch (MembershipCreateUserException e)
-                {
-                    ModelState.AddModelError("", ErrorCodeToString(e.StatusCode));
-                }
-            }
-
-            // If we got this far, something failed, redisplay form
-            return View(model);
-        }
+        #region Methods
 
         //
         // POST: /Account/Disassociate
-
         [HttpPost]
         [ValidateAntiForgeryToken]
         public ActionResult Disassociate(string provider, string providerUserId)
@@ -123,8 +63,147 @@ namespace JQueryFileUploadMVC.Controllers
         }
 
         //
-        // GET: /Account/Manage
+        // POST: /Account/ExternalLogin
+        [HttpPost]
+        [AllowAnonymous]
+        [ValidateAntiForgeryToken]
+        public ActionResult ExternalLogin(string provider, string returnUrl)
+        {
+            return new ExternalLoginResult(provider, Url.Action("ExternalLoginCallback", new { ReturnUrl = returnUrl }));
+        }
 
+        //
+        // GET: /Account/ExternalLoginCallback
+        [AllowAnonymous]
+        public ActionResult ExternalLoginCallback(string returnUrl)
+        {
+            AuthenticationResult result = OAuthWebSecurity.VerifyAuthentication(Url.Action("ExternalLoginCallback", new { ReturnUrl = returnUrl }));
+            if (!result.IsSuccessful)
+            {
+                return RedirectToAction("ExternalLoginFailure");
+            }
+
+            if (OAuthWebSecurity.Login(result.Provider, result.ProviderUserId, createPersistentCookie: false))
+            {
+                return RedirectToLocal(returnUrl);
+            }
+
+            if (User.Identity.IsAuthenticated)
+            {
+                // If the current user is logged in add the new account
+                OAuthWebSecurity.CreateOrUpdateAccount(result.Provider, result.ProviderUserId, User.Identity.Name);
+                return RedirectToLocal(returnUrl);
+            }
+            else
+            {
+                // User is new, ask for their desired membership name
+                string loginData = OAuthWebSecurity.SerializeProviderUserId(result.Provider, result.ProviderUserId);
+                ViewBag.ProviderDisplayName = OAuthWebSecurity.GetOAuthClientData(result.Provider).DisplayName;
+                ViewBag.ReturnUrl = returnUrl;
+                return View("ExternalLoginConfirmation", new RegisterExternalLoginModel { UserName = result.UserName, ExternalLoginData = loginData });
+            }
+        }
+
+        //
+        // POST: /Account/ExternalLoginConfirmation
+        [HttpPost]
+        [AllowAnonymous]
+        [ValidateAntiForgeryToken]
+        public ActionResult ExternalLoginConfirmation(RegisterExternalLoginModel model, string returnUrl)
+        {
+            string provider = null;
+            string providerUserId = null;
+
+            if (User.Identity.IsAuthenticated || !OAuthWebSecurity.TryDeserializeProviderUserId(model.ExternalLoginData, out provider, out providerUserId))
+            {
+                return RedirectToAction("Manage");
+            }
+
+            if (ModelState.IsValid)
+            {
+                // Insert a new user into the database
+                using (UsersContext db = new UsersContext())
+                {
+                    UserProfile user = db.UserProfiles.FirstOrDefault(u => u.UserName.ToLower() == model.UserName.ToLower());
+                    // Check if user already exists
+                    if (user == null)
+                    {
+                        // Insert name into the profile table
+                        db.UserProfiles.Add(new UserProfile { UserName = model.UserName });
+                        db.SaveChanges();
+
+                        OAuthWebSecurity.CreateOrUpdateAccount(provider, providerUserId, model.UserName);
+                        OAuthWebSecurity.Login(provider, providerUserId, createPersistentCookie: false);
+
+                        return RedirectToLocal(returnUrl);
+                    }
+                    else
+                    {
+                        ModelState.AddModelError("UserName", "User name already exists. Please enter a different user name.");
+                    }
+                }
+            }
+
+            ViewBag.ProviderDisplayName = OAuthWebSecurity.GetOAuthClientData(provider).DisplayName;
+            ViewBag.ReturnUrl = returnUrl;
+            return View(model);
+        }
+
+        //
+        // GET: /Account/ExternalLoginFailure
+        [AllowAnonymous]
+        public ActionResult ExternalLoginFailure()
+        {
+            return View();
+        }
+
+        [AllowAnonymous]
+        [ChildActionOnly]
+        public ActionResult ExternalLoginsList(string returnUrl)
+        {
+            ViewBag.ReturnUrl = returnUrl;
+            return PartialView("_ExternalLoginsListPartial", OAuthWebSecurity.RegisteredClientData);
+        }
+
+        //
+        // GET: /Account/Login
+        [AllowAnonymous]
+        public ActionResult Login(string returnUrl)
+        {
+            ViewBag.ReturnUrl = returnUrl;
+            return View();
+        }
+
+        //
+        // POST: /Account/Login
+        [HttpPost]
+        [AllowAnonymous]
+        [ValidateAntiForgeryToken]
+        public ActionResult Login(LoginModel model, string returnUrl)
+        {
+            if (ModelState.IsValid && WebSecurity.Login(model.UserName, model.Password, persistCookie: model.RememberMe))
+            {
+                return RedirectToLocal(returnUrl);
+            }
+
+            // If we got this far, something failed, redisplay form
+            ModelState.AddModelError("", "The user name or password provided is incorrect.");
+            return View(model);
+        }
+
+        //
+        // POST: /Account/LogOff
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public ActionResult LogOff()
+        {
+            WebSecurity.Logout();
+
+            return RedirectToAction("Index", "Home");
+        }
+
+        //
+        // GET: /Account/Manage
         public ActionResult Manage(ManageMessageId? message)
         {
             ViewBag.StatusMessage =
@@ -139,7 +218,6 @@ namespace JQueryFileUploadMVC.Controllers
 
         //
         // POST: /Account/Manage
-
         [HttpPost]
         [ValidateAntiForgeryToken]
         public ActionResult Manage(LocalPasswordModel model)
@@ -201,110 +279,37 @@ namespace JQueryFileUploadMVC.Controllers
         }
 
         //
-        // POST: /Account/ExternalLogin
-
-        [HttpPost]
+        // GET: /Account/Register
         [AllowAnonymous]
-        [ValidateAntiForgeryToken]
-        public ActionResult ExternalLogin(string provider, string returnUrl)
-        {
-            return new ExternalLoginResult(provider, Url.Action("ExternalLoginCallback", new { ReturnUrl = returnUrl }));
-        }
-
-        //
-        // GET: /Account/ExternalLoginCallback
-
-        [AllowAnonymous]
-        public ActionResult ExternalLoginCallback(string returnUrl)
-        {
-            AuthenticationResult result = OAuthWebSecurity.VerifyAuthentication(Url.Action("ExternalLoginCallback", new { ReturnUrl = returnUrl }));
-            if (!result.IsSuccessful)
-            {
-                return RedirectToAction("ExternalLoginFailure");
-            }
-
-            if (OAuthWebSecurity.Login(result.Provider, result.ProviderUserId, createPersistentCookie: false))
-            {
-                return RedirectToLocal(returnUrl);
-            }
-
-            if (User.Identity.IsAuthenticated)
-            {
-                // If the current user is logged in add the new account
-                OAuthWebSecurity.CreateOrUpdateAccount(result.Provider, result.ProviderUserId, User.Identity.Name);
-                return RedirectToLocal(returnUrl);
-            }
-            else
-            {
-                // User is new, ask for their desired membership name
-                string loginData = OAuthWebSecurity.SerializeProviderUserId(result.Provider, result.ProviderUserId);
-                ViewBag.ProviderDisplayName = OAuthWebSecurity.GetOAuthClientData(result.Provider).DisplayName;
-                ViewBag.ReturnUrl = returnUrl;
-                return View("ExternalLoginConfirmation", new RegisterExternalLoginModel { UserName = result.UserName, ExternalLoginData = loginData });
-            }
-        }
-
-        //
-        // POST: /Account/ExternalLoginConfirmation
-
-        [HttpPost]
-        [AllowAnonymous]
-        [ValidateAntiForgeryToken]
-        public ActionResult ExternalLoginConfirmation(RegisterExternalLoginModel model, string returnUrl)
-        {
-            string provider = null;
-            string providerUserId = null;
-
-            if (User.Identity.IsAuthenticated || !OAuthWebSecurity.TryDeserializeProviderUserId(model.ExternalLoginData, out provider, out providerUserId))
-            {
-                return RedirectToAction("Manage");
-            }
-
-            if (ModelState.IsValid)
-            {
-                // Insert a new user into the database
-                using (UsersContext db = new UsersContext())
-                {
-                    UserProfile user = db.UserProfiles.FirstOrDefault(u => u.UserName.ToLower() == model.UserName.ToLower());
-                    // Check if user already exists
-                    if (user == null)
-                    {
-                        // Insert name into the profile table
-                        db.UserProfiles.Add(new UserProfile { UserName = model.UserName });
-                        db.SaveChanges();
-
-                        OAuthWebSecurity.CreateOrUpdateAccount(provider, providerUserId, model.UserName);
-                        OAuthWebSecurity.Login(provider, providerUserId, createPersistentCookie: false);
-
-                        return RedirectToLocal(returnUrl);
-                    }
-                    else
-                    {
-                        ModelState.AddModelError("UserName", "User name already exists. Please enter a different user name.");
-                    }
-                }
-            }
-
-            ViewBag.ProviderDisplayName = OAuthWebSecurity.GetOAuthClientData(provider).DisplayName;
-            ViewBag.ReturnUrl = returnUrl;
-            return View(model);
-        }
-
-        //
-        // GET: /Account/ExternalLoginFailure
-
-        [AllowAnonymous]
-        public ActionResult ExternalLoginFailure()
+        public ActionResult Register()
         {
             return View();
         }
 
+        //
+        // POST: /Account/Register
+        [HttpPost]
         [AllowAnonymous]
-        [ChildActionOnly]
-        public ActionResult ExternalLoginsList(string returnUrl)
+        [ValidateAntiForgeryToken]
+        public ActionResult Register(RegisterModel model)
         {
-            ViewBag.ReturnUrl = returnUrl;
-            return PartialView("_ExternalLoginsListPartial", OAuthWebSecurity.RegisteredClientData);
+            if (ModelState.IsValid)
+            {
+                // Attempt to register the user
+                try
+                {
+                    WebSecurity.CreateUserAndAccount(model.UserName, model.Password);
+                    WebSecurity.Login(model.UserName, model.Password);
+                    return RedirectToAction("Index", "Home");
+                }
+                catch (MembershipCreateUserException e)
+                {
+                    ModelState.AddModelError("", ErrorCodeToString(e.StatusCode));
+                }
+            }
+
+            // If we got this far, something failed, redisplay form
+            return View(model);
         }
 
         [ChildActionOnly]
@@ -326,43 +331,6 @@ namespace JQueryFileUploadMVC.Controllers
 
             ViewBag.ShowRemoveButton = externalLogins.Count > 1 || OAuthWebSecurity.HasLocalAccount(WebSecurity.GetUserId(User.Identity.Name));
             return PartialView("_RemoveExternalLoginsPartial", externalLogins);
-        }
-
-        #region Helpers
-        private ActionResult RedirectToLocal(string returnUrl)
-        {
-            if (Url.IsLocalUrl(returnUrl))
-            {
-                return Redirect(returnUrl);
-            }
-            else
-            {
-                return RedirectToAction("Index", "Home");
-            }
-        }
-
-        public enum ManageMessageId
-        {
-            ChangePasswordSuccess,
-            SetPasswordSuccess,
-            RemoveLoginSuccess,
-        }
-
-        internal class ExternalLoginResult : ActionResult
-        {
-            public ExternalLoginResult(string provider, string returnUrl)
-            {
-                Provider = provider;
-                ReturnUrl = returnUrl;
-            }
-
-            public string Provider { get; private set; }
-            public string ReturnUrl { get; private set; }
-
-            public override void ExecuteResult(ControllerContext context)
-            {
-                OAuthWebSecurity.RequestAuthentication(Provider, ReturnUrl);
-            }
         }
 
         private static string ErrorCodeToString(MembershipCreateStatus createStatus)
@@ -402,6 +370,59 @@ namespace JQueryFileUploadMVC.Controllers
                     return "An unknown error occurred. Please verify your entry and try again. If the problem persists, please contact your system administrator.";
             }
         }
-        #endregion
+
+        private ActionResult RedirectToLocal(string returnUrl)
+        {
+            if (Url.IsLocalUrl(returnUrl))
+            {
+                return Redirect(returnUrl);
+            }
+            else
+            {
+                return RedirectToAction("Index", "Home");
+            }
+        }
+
+        #endregion Methods
+
+        #region Nested Types
+
+        internal class ExternalLoginResult : ActionResult
+        {
+            #region Constructors
+
+            public ExternalLoginResult(string provider, string returnUrl)
+            {
+                Provider = provider;
+                ReturnUrl = returnUrl;
+            }
+
+            #endregion Constructors
+
+            #region Properties
+
+            public string Provider
+            {
+                get; private set;
+            }
+
+            public string ReturnUrl
+            {
+                get; private set;
+            }
+
+            #endregion Properties
+
+            #region Methods
+
+            public override void ExecuteResult(ControllerContext context)
+            {
+                OAuthWebSecurity.RequestAuthentication(Provider, ReturnUrl);
+            }
+
+            #endregion Methods
+        }
+
+        #endregion Nested Types
     }
 }
